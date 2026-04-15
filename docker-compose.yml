@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: taxi-db
+    environment:
+      POSTGRES_DB: taxi_dispatch
+      POSTGRES_USER: taxi_user
+      POSTGRES_PASSWORD: taxi_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taxi_user -d taxi_dispatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    container_name: taxi-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://taxi_user:taxi_password@db:5432/taxi_dispatch
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: taxi_dispatch
+      POSTGRES_USER: taxi_user
+      POSTGRES_PASSWORD: taxi_password
+      SECRET_KEY: super-secret-key-change-me
+      CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","http://localhost"]'
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000/api
+    container_name: taxi-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres_data:
