@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "20260415_01"
@@ -17,10 +18,18 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-user_role_enum = sa.Enum("CLIENT", "DRIVER", "DISPATCHER", "ADMIN", name="userrole")
-driver_status_enum = sa.Enum("FREE", "ON_ORDER", "BREAK", "INACTIVE", name="driverstatus")
-order_status_enum = sa.Enum("PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED", name="orderstatus")
-comfort_class_enum = sa.Enum("ECONOMY", "STANDARD", "BUSINESS", name="carcomfortclass")
+user_role_enum = postgresql.ENUM(
+    "CLIENT", "DRIVER", "DISPATCHER", "ADMIN", name="userrole", create_type=False
+)
+driver_status_enum = postgresql.ENUM(
+    "FREE", "ON_ORDER", "BREAK", "INACTIVE", name="driverstatus", create_type=False
+)
+order_status_enum = postgresql.ENUM(
+    "PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED", name="orderstatus", create_type=False
+)
+comfort_class_enum = postgresql.ENUM(
+    "ECONOMY", "STANDARD", "BUSINESS", name="carcomfortclass", create_type=False
+)
 
 
 def upgrade() -> None:
