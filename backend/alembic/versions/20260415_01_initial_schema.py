@@ -18,9 +18,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-user_role_enum = postgresql.ENUM(
-    "CLIENT", "DRIVER", "DISPATCHER", "ADMIN", name="userrole", create_type=False
-)
+user_role_enum = postgresql.ENUM("CLIENT", "DRIVER", "DISPATCHER", name="userrole", create_type=False)
 driver_status_enum = postgresql.ENUM(
     "FREE", "ON_ORDER", "BREAK", "INACTIVE", name="driverstatus", create_type=False
 )
@@ -30,6 +28,7 @@ order_status_enum = postgresql.ENUM(
 comfort_class_enum = postgresql.ENUM(
     "ECONOMY", "STANDARD", "BUSINESS", name="carcomfortclass", create_type=False
 )
+token_type_enum = postgresql.ENUM("ACCESS", "REFRESH", name="tokentype", create_type=False)
 
 
 def upgrade() -> None:
@@ -38,6 +37,7 @@ def upgrade() -> None:
     driver_status_enum.create(bind, checkfirst=True)
     order_status_enum.create(bind, checkfirst=True)
     comfort_class_enum.create(bind, checkfirst=True)
+    token_type_enum.create(bind, checkfirst=True)
 
     op.create_table(
         "users",
@@ -49,6 +49,20 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
     op.create_index("ix_users_username", "users", ["username"], unique=True)
+
+    op.create_table(
+        "auth_tokens",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("jti", sa.String(length=64), nullable=False),
+        sa.Column("token_type", token_type_enum, nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("is_revoked", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.UniqueConstraint("jti"),
+    )
+    op.create_index("ix_auth_tokens_jti", "auth_tokens", ["jti"], unique=True)
+    op.create_index("ix_auth_tokens_user_id", "auth_tokens", ["user_id"], unique=False)
 
     op.create_table(
         "clients",
@@ -130,6 +144,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_auth_tokens_user_id", table_name="auth_tokens")
+    op.drop_index("ix_auth_tokens_jti", table_name="auth_tokens")
+    op.drop_table("auth_tokens")
     op.drop_table("reviews")
     op.drop_table("orders")
     op.drop_table("tariffs")
@@ -141,6 +158,7 @@ def downgrade() -> None:
     op.drop_table("users")
 
     bind = op.get_bind()
+    token_type_enum.drop(bind, checkfirst=True)
     comfort_class_enum.drop(bind, checkfirst=True)
     order_status_enum.drop(bind, checkfirst=True)
     driver_status_enum.drop(bind, checkfirst=True)

@@ -1,50 +1,71 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.core.security import hash_password
+from app.models.entities import User, UserRole
 
 
-def register_user(client: TestClient, username: str, role: str, phone: str = "", license_number: str = ""):
-    payload = {
-        "username": username,
-        "password": "secret123",
-        "role": role,
-    }
-    if phone:
-        payload["phone"] = phone
-    if license_number:
-        payload["license_number"] = license_number
-
-    response = client.post("/api/auth/register", json=payload)
-    assert response.status_code == 201, response.text
-
-
-def login(client: TestClient, username: str):
+def login(client: TestClient, email: str, password: str):
     response = client.post(
         "/api/auth/login",
-        json={"username": username, "password": "secret123"},
+        json={"email": email, "password": password},
     )
     assert response.status_code == 200, response.text
-    return response.json()["access_token"]
+    data = response.json()
+    return data["accessToken"]
 
 
-def test_register_and_me(client: TestClient):
-    register_user(client, "client1", "client", phone="+380501112233")
+def create_admin(db_session: Session, email: str = "admin@taxi.local", password: str = "admin123") -> None:
+    admin = User(
+        username=email,
+        hashed_password=hash_password(password),
+        first_name="System",
+        last_name="Admin",
+        phone="+380500000000",
+        role=UserRole.ADMIN,
+    )
+    db_session.add(admin)
+    db_session.commit()
 
-    token = login(client, "client1")
+
+def test_predefined_client_login_and_me(client: TestClient):
+    token = login(client, "client@taxi.local", "client123")
     response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200
     data = response.json()
-    assert data["username"] == "client1"
+    assert data["username"] == "client@taxi.local"
     assert data["role"] == "client"
 
 
-def test_order_flow_with_auto_driver_assignment(client: TestClient):
-    register_user(client, "admin1", "admin")
-    register_user(client, "driver1", "driver", license_number="DRV-001")
-    register_user(client, "client2", "client", phone="+380502224455")
+def test_register_login_and_refresh_cookie(client: TestClient):
+    register_response = client.post(
+        "/api/auth/register",
+        json={
+            "first_name": "New",
+            "last_name": "Client",
+            "phone": "+380501111111",
+            "email": "newuser@example.com",
+            "password": "secret123",
+        },
+    )
+    assert register_response.status_code == 201, register_response.text
+    assert register_response.json()["role"] == "client"
+    assert "refreshToken" in register_response.headers.get("set-cookie", "")
 
-    admin_token = login(client, "admin1")
-    driver_token = login(client, "driver1")
-    client_token = login(client, "client2")
+    refresh_response = client.post("/api/auth/refresh")
+    assert refresh_response.status_code == 200, refresh_response.text
+    payload = refresh_response.json()
+    assert payload["email"] == "newuser@example.com"
+    assert payload["role"] == "client"
+    assert payload.get("accessToken")
+
+
+def test_order_flow_with_auto_driver_assignment(client: TestClient, db_session: Session):
+    create_admin(db_session)
+    admin_token = login(client, "admin@taxi.local", "admin123")
+    driver_token = login(client, "driver@taxi.local", "driver123")
+    client_token = login(client, "client@taxi.local", "client123")
 
     car_response = client.post(
         "/api/management/cars",
@@ -81,10 +102,18 @@ def test_order_flow_with_auto_driver_assignment(client: TestClient):
     driver_id = drivers_response.json()[0]["id"]
 
     assign_response = client.patch(
-        f"/api/management/drivers/{driver_id}/assign-car?car_id={car_id}",
+        f"/api/management/drivers/{driver_id}/assign-car",
+        json={"car_id": car_id},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert assign_response.status_code == 200, assign_response.text
+
+    location_response = client.patch(
+        "/api/management/drivers/me/location",
+        json={"lat": 49.8397, "lng": 24.0297},
+        headers={"Authorization": f"Bearer {driver_token}"},
+    )
+    assert location_response.status_code == 200, location_response.text
 
     status_response = client.patch(
         "/api/management/drivers/me/status",
@@ -96,12 +125,12 @@ def test_order_flow_with_auto_driver_assignment(client: TestClient):
     order_response = client.post(
         "/api/orders",
         json={
-            "pickup_address": "Kyiv Railway Station",
-            "dropoff_address": "Boryspil Airport",
-            "pickup_lat": 50.4412,
-            "pickup_lng": 30.4888,
-            "dropoff_lat": 50.345,
-            "dropoff_lng": 30.8947,
+            "pickup_address": "Lviv Railway Station",
+            "dropoff_address": "Lviv Airport",
+            "pickup_lat": 49.8397,
+            "pickup_lng": 24.0297,
+            "dropoff_lat": 49.8125,
+            "dropoff_lng": 23.9722,
             "comfort_class": "standard",
         },
         headers={"Authorization": f"Bearer {client_token}"},
@@ -110,16 +139,86 @@ def test_order_flow_with_auto_driver_assignment(client: TestClient):
     assert order_response.status_code == 201, order_response.text
     order = order_response.json()
     assert order["driver_id"] is not None
-    assert order["status"] == "in_progress"
+    assert order["status"] == "pending"
 
-
-def test_client_requires_phone(client: TestClient):
-    response = client.post(
-        "/api/auth/register",
+    second_order_response = client.post(
+        "/api/orders",
         json={
-            "username": "bad_client",
-            "password": "secret123",
-            "role": "client",
+            "pickup_address": "Lviv Center",
+            "dropoff_address": "Stryiskyi Park",
+            "pickup_lat": 49.8397,
+            "pickup_lng": 24.0297,
+            "dropoff_lat": 49.8257,
+            "dropoff_lng": 24.0299,
+            "comfort_class": "standard",
+        },
+        headers={"Authorization": f"Bearer {client_token}"},
+    )
+    assert second_order_response.status_code == 400
+    assert second_order_response.json()["detail"] == "Client already has an active order"
+
+
+def test_login_invalid_email_or_password(client: TestClient):
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "email": "unknown@example.com",
+            "password": "wrongpass",
         },
     )
+    assert response.status_code == 401
+
+
+def test_driver_application_approve_flow(client: TestClient, db_session: Session):
+    create_admin(db_session)
+    admin_token = login(client, "admin@taxi.local", "admin123")
+
+    create_application = client.post(
+        "/api/auth/driver-applications",
+        json={
+            "first_name": "Ivan",
+            "last_name": "Driver",
+            "phone": "+380509999999",
+            "email": "pending-driver@example.com",
+            "password": "secret123",
+            "license_series": "LV",
+            "license_number": "AB123456",
+        },
+    )
+    assert create_application.status_code == 201, create_application.text
+    application_id = create_application.json()["id"]
+    assert create_application.json()["status"] == "pending"
+
+    review_response = client.patch(
+        f"/api/management/driver-applications/{application_id}",
+        json={"approve": True, "review_note": "Документи валідні"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert review_response.status_code == 200, review_response.text
+    assert review_response.json()["status"] == "approved"
+
+    login_driver_response = client.post(
+        "/api/auth/login",
+        json={"email": "pending-driver@example.com", "password": "secret123"},
+    )
+    assert login_driver_response.status_code == 200, login_driver_response.text
+    assert login_driver_response.json()["role"] == "driver"
+
+
+def test_order_points_must_be_within_lviv(client: TestClient):
+    client_token = login(client, "client@taxi.local", "client123")
+    response = client.post(
+        "/api/orders",
+        json={
+            "pickup_address": "Kyiv Railway Station",
+            "dropoff_address": "Lviv Airport",
+            "pickup_lat": 50.4412,
+            "pickup_lng": 30.4888,
+            "dropoff_lat": 49.8125,
+            "dropoff_lng": 23.9722,
+            "comfort_class": "standard",
+        },
+        headers={"Authorization": f"Bearer {client_token}"},
+    )
     assert response.status_code == 400
+    assert response.json()["detail"] == "Pickup point must be within Lviv"

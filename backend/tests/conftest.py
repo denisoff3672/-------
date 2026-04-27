@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.db.seed import seed_predefined_users
 from app.db.session import get_db
 from app.main import app
 from app.models.entities import Base
@@ -22,6 +23,7 @@ def db_session() -> Generator[Session, None, None]:
     Base.metadata.create_all(bind=engine)
 
     db = TestingSessionLocal()
+    seed_predefined_users(db)
     try:
         yield db
     finally:
@@ -38,6 +40,6 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
             pass
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
+    with TestClient(app, base_url="https://testserver") as c:
         yield c
     app.dependency_overrides.clear()
