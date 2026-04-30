@@ -141,6 +141,7 @@ class DriverClassApplicationReview(BaseModel):
     approve: bool
     approved_car_class: CarComfortClass | None = None
     review_note: str = Field(min_length=3, max_length=1000)
+    review_note_i18n: dict[str, str] | None = None
 
 
 class DriverOwnCarRequest(BaseModel):
@@ -170,6 +171,7 @@ class DriverProfileOut(BaseModel):
     own_car: dict | None
     last_class_application_status: DriverClassApplicationStatus | None = None
     last_class_application_note: str | None = None
+    last_class_application_note_i18n: dict[str, str] | None = None
 
 
 class DriverStatusUpdate(BaseModel):
@@ -253,6 +255,7 @@ class ReviewCreate(BaseModel):
     order_id: int
     rating: int = Field(ge=0, le=5)
     comment: str | None = None
+    comment_i18n: dict[str, str] | None = None
 
 
 class ReviewBriefOut(BaseModel):
@@ -261,6 +264,7 @@ class ReviewBriefOut(BaseModel):
     id: int
     rating: int
     comment: str | None
+    comment_i18n: dict[str, str] | None = None
     created_at: datetime
 
 
@@ -273,6 +277,7 @@ class ReviewOut(BaseModel):
     driver_id: int
     rating: int
     comment: str | None
+    comment_i18n: dict[str, str] | None = None
     created_at: datetime
 
 
@@ -368,6 +373,7 @@ class DriverClassApplicationOut(BaseModel):
     status: DriverClassApplicationStatus
     reviewed_by: int | None
     review_note: str | None
+    review_note_i18n: dict[str, str] | None = None
     reviewed_at: datetime | None
     created_at: datetime
 

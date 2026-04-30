@@ -258,6 +258,11 @@ button:hover {
   margin: 4px 0;
 }
 
+.class-approval-form {
+  display: grid;
+  gap: 10px;
+}
+
 .fleet-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

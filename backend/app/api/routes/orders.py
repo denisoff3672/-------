@@ -397,6 +397,7 @@ def create_review(
         driver_id=order.driver_id,
         rating=payload.rating,
         comment=payload.comment,
+        comment_i18n=payload.comment_i18n,
     )
     db.add(review)
     db.flush()

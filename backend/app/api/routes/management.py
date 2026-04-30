@@ -586,6 +586,7 @@ def driver_my_profile(
         own_car=own_car,
         last_class_application_status=last_application.status if last_application else None,
         last_class_application_note=last_application.review_note if last_application else None,
+        last_class_application_note_i18n=last_application.review_note_i18n if last_application else None,
     )
 
 
@@ -694,6 +695,7 @@ def review_driver_class_application(
 
     application.reviewed_by = current_user.id
     application.review_note = payload.review_note
+    application.review_note_i18n = payload.review_note_i18n
     application.reviewed_at = datetime.now(timezone.utc)
 
     if payload.approve:
