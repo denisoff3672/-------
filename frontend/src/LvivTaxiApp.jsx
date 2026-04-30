@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { apiRequest } from './api';
+import { API_URL, apiRequest } from './api';
 
 const CLASS_ORDER = ['economy', 'standard', 'comfort', 'business'];
 const CLASS_LABELS = {
@@ -8,6 +8,9 @@ const CLASS_LABELS = {
   comfort: 'Комфорт',
   business: 'Бізнес',
 };
+
+const UKR_FIRST_NAMES = ['Олександр', 'Андрій', 'Тарас', 'Іван', 'Василь', 'Дмитро', 'Максим', 'Роман', 'Богдан', 'Ярослав'];
+const UKR_LAST_NAMES = ['Коваль', 'Шевченко', 'Мельник', 'Бондар', 'Ткачук', 'Кравченко', 'Олійник', 'Поліщук', 'Бойко', 'Савчук'];
 
 const DRIVER_STATUS_LABELS = {
   free: 'В роботі',
@@ -50,6 +53,21 @@ function money(value) {
   return `${Number(value).toFixed(2)} грн`;
 }
 
+function shortAddress(value) {
+  if (!value) return '-';
+  const parts = value.split(',').map((item) => item.trim()).filter(Boolean);
+  return parts.slice(0, 2).join(', ') || value;
+}
+
+function displayDriverName(name, driverId) {
+  if (!name) return 'Невідомий водій';
+  if (!/driver\d+/i.test(name) && !/import/i.test(name)) return name;
+  const base = Number(driverId) || name.length;
+  const first = UKR_FIRST_NAMES[base % UKR_FIRST_NAMES.length];
+  const last = UKR_LAST_NAMES[Math.floor(base / UKR_FIRST_NAMES.length) % UKR_LAST_NAMES.length];
+  return `${first} ${last}`;
+}
+
 function buildGoogleMapUrl(pickup, dropoff) {
   if (pickup?.lat && pickup?.lng && dropoff?.lat && dropoff?.lng) {
     return `https://www.google.com/maps?output=embed&hl=uk&saddr=${pickup.lat},${pickup.lng}&daddr=${dropoff.lat},${dropoff.lng}`;
@@ -67,7 +85,6 @@ function isWithinLviv(lat, lng) {
 async function geocodeAddress(query) {
   const normalized = query.trim();
   if (!normalized) throw new Error('Вкажіть адресу');
-
   const lvivQuery = /львів/i.test(normalized) ? normalized : `${normalized}, Львів`;
   const response = await fetch(
     `https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=uk&q=${encodeURIComponent(lvivQuery)}`
@@ -124,6 +141,7 @@ export default function LvivTaxiApp() {
   const [messageType, setMessageType] = useState('info');
   const [token, setToken] = useState('');
   const [user, setUser] = useState(null);
+  const [toastMessage, setToastMessage] = useState('');
 
   const [form, setForm] = useState({
     first_name: '',
@@ -152,6 +170,24 @@ export default function LvivTaxiApp() {
     classReviewNoteByDriver: {},
     classApprovalByApplication: {},
     classReviewNoteById: {},
+    activeView: 'requests',
+    rejectionDraftByApplication: {},
+    searchQuery: '',
+    searchResults: null,
+    searching: false,
+    importingParquet: false,
+    selectedParquetFile: null,
+    selectedAddressesFile: null,
+    importFiles: [],
+    applicationsQuery: '',
+    orderLogsQuery: '',
+    classLogsQuery: '',
+    driverApplicationLogsQuery: '',
+    fleetQuery: '',
+    pendingClassQuery: '',
+    statsMetric: 'revenue',
+    driverStatsQuery: '',
+    adminReviewsQuery: '',
   });
 
   const [clientData, setClientData] = useState({
@@ -174,6 +210,7 @@ export default function LvivTaxiApp() {
     creatingOrder: false,
     cancellingOrder: false,
     creatingReview: false,
+    pendingOrderConfirmation: null,
   });
 
   const [driverData, setDriverData] = useState({
@@ -194,12 +231,25 @@ export default function LvivTaxiApp() {
     loadingLocation: false,
     loadingStatus: false,
     loadingOrderAction: false,
+    ownCarModalOpen: false,
+    ordersTab: 'active',
+    reviewsQuery: '',
   });
 
   const setFlash = (type, text) => {
     setMessageType(type);
     setMessage(text);
   };
+
+  const showToast = (text) => {
+    setToastMessage(text);
+  };
+
+  useEffect(() => {
+    if (!toastMessage) return undefined;
+    const timer = setTimeout(() => setToastMessage(''), 3000);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
 
   const selectedFleetCar = useMemo(
     () => adminData.fleetCars.find((car) => car.id === adminData.selectedCarId) || null,
@@ -231,11 +281,11 @@ export default function LvivTaxiApp() {
 
   const loadAdminData = async (accessToken) => {
     const [applications, classApplications, drivers, fleetCars, logs, analytics, driverStats, reviews] = await Promise.all([
-      apiRequest('/management/driver-applications', { method: 'GET' }, accessToken),
-      apiRequest('/management/driver-class-applications', { method: 'GET' }, accessToken),
+      apiRequest('/management/driver-applications?limit=1000', { method: 'GET' }, accessToken),
+      apiRequest('/management/driver-class-applications?limit=1000', { method: 'GET' }, accessToken),
       apiRequest('/management/drivers', { method: 'GET' }, accessToken),
       apiRequest('/management/fleet/cars', { method: 'GET' }, accessToken),
-      apiRequest('/management/analytics/order-logs', { method: 'GET' }, accessToken),
+      apiRequest('/management/analytics/order-logs?limit=1000', { method: 'GET' }, accessToken),
       apiRequest('/management/analytics/overview', { method: 'GET' }, accessToken),
       apiRequest('/management/analytics/drivers', { method: 'GET' }, accessToken),
       apiRequest('/management/reviews', { method: 'GET' }, accessToken),
@@ -390,7 +440,8 @@ export default function LvivTaxiApp() {
       setToken(auth.accessToken);
       const me = await apiRequest('/auth/me', { method: 'GET' }, auth.accessToken);
       setUser(me);
-      setFlash('success', 'Вхід виконано');
+      setMessage('');
+      showToast('Вхід виконано');
     } catch (error) {
       setFlash('error', parseError(error));
     } finally {
@@ -449,7 +500,8 @@ export default function LvivTaxiApp() {
     }
     setToken('');
     setUser(null);
-    setFlash('success', 'Ви вийшли з системи');
+    setMessage('');
+    showToast('Ви вийшли з системи');
   };
 
   const submitAuth = async (event) => {
@@ -530,37 +582,6 @@ export default function LvivTaxiApp() {
       );
       await loadAdminData(token);
       setFlash('success', 'Авто видано водію');
-    } catch (error) {
-      setFlash('error', parseError(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const approveDriverClass = async (driverId, approve = true) => {
-    const approvedClass = adminData.classApprovalByDriver[driverId] || 'economy';
-    const reviewNote = (adminData.classReviewNoteByDriver?.[driverId] || '').trim();
-    if (!approve && reviewNote.length < 3) {
-      setFlash('error', 'Вкажіть причину відхилення (мінімум 3 символи)');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      await apiRequest(
-        `/management/drivers/${driverId}/approve-class`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({
-            approve,
-            approved_car_class: approve ? approvedClass : null,
-            review_note: reviewNote || null,
-          }),
-        },
-        token
-      );
-      await loadAdminData(token);
-      setFlash('success', approve ? 'Клас водія підтверджено' : 'Заявку на клас водія відхилено');
     } catch (error) {
       setFlash('error', parseError(error));
     } finally {
@@ -674,11 +695,19 @@ export default function LvivTaxiApp() {
       setFlash('error', 'Замовлення доступні тільки в межах Львова');
       return;
     }
-    const isConfirmed = window.confirm(
-      `Почати пошук водія?\nКлас: ${CLASS_LABELS[comfortClass]}\nМаршрут: ${clientData.pickup_address} -> ${clientData.dropoff_address}`
-    );
-    if (!isConfirmed) return;
+    setClientData((prev) => ({
+      ...prev,
+      pendingOrderConfirmation: {
+        comfortClass,
+        pickup_address: prev.pickup_address,
+        dropoff_address: prev.dropoff_address,
+      },
+    }));
+  };
 
+  const confirmCreateOrder = async () => {
+    const comfortClass = clientData.pendingOrderConfirmation?.comfortClass;
+    if (!comfortClass) return;
     try {
       setClientData((prev) => ({ ...prev, creatingOrder: true, selected_class: comfortClass }));
       await apiRequest(
@@ -702,7 +731,7 @@ export default function LvivTaxiApp() {
     } catch (error) {
       setFlash('error', parseError(error));
     } finally {
-      setClientData((prev) => ({ ...prev, creatingOrder: false }));
+      setClientData((prev) => ({ ...prev, creatingOrder: false, pendingOrderConfirmation: null }));
     }
   };
 
@@ -889,279 +918,614 @@ export default function LvivTaxiApp() {
     }
   };
 
+  const searchAdminEntities = async () => {
+    const query = adminData.searchQuery.trim();
+    if (query.length < 2) {
+      setFlash('error', 'Вкажіть мінімум 2 символи для пошуку');
+      return;
+    }
+    try {
+      setAdminData((prev) => ({ ...prev, searching: true }));
+      const result = await apiRequest(`/management/analytics/search?q=${encodeURIComponent(query)}`, { method: 'GET' }, token);
+      setAdminData((prev) => ({ ...prev, searchResults: result }));
+    } catch (error) {
+      setFlash('error', parseError(error));
+    } finally {
+      setAdminData((prev) => ({ ...prev, searching: false }));
+    }
+  };
+
+  const handleImportFilesSelect = (event) => {
+    const selected = Array.from(event.target.files || []);
+    const parquetFile =
+      selected.find((item) => item.name.toLowerCase().includes('.parquet')) ||
+      selected.find((item) => (item.type || '').toLowerCase().includes('parquet')) ||
+      selected[0] ||
+      null;
+    let addressesFile =
+      selected.find((item) => item.name.toLowerCase().includes('.csv')) ||
+      selected.find((item) => (item.type || '').toLowerCase().includes('csv')) ||
+      null;
+    if (!addressesFile && selected.length >= 2) {
+      addressesFile = selected.find((item) => item !== parquetFile) || null;
+    }
+    setAdminData((prev) => ({
+      ...prev,
+      importFiles: selected,
+      selectedParquetFile: parquetFile,
+      selectedAddressesFile: addressesFile,
+    }));
+  };
+
+  const importParquetByAdmin = async () => {
+    if (!adminData.selectedParquetFile) {
+      setFlash('error', 'Спочатку оберіть parquet файл');
+      return;
+    }
+
+    try {
+      setAdminData((prev) => ({ ...prev, importingParquet: true }));
+      const formData = new FormData();
+      formData.append('file', adminData.selectedParquetFile);
+      if (adminData.selectedAddressesFile) {
+        formData.append('addresses_file', adminData.selectedAddressesFile);
+      }
+      const response = await fetch(`${API_URL}/management/seed/import-parquet`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(JSON.stringify(payload));
+      }
+      await loadAdminData(token);
+      showToast(`Parquet імпортовано. Додано замовлень: ${payload.records?.orders || 0}`);
+    } catch (error) {
+      setFlash('error', parseError(error));
+    } finally {
+      setAdminData((prev) => ({
+        ...prev,
+        importingParquet: false,
+        selectedParquetFile: null,
+        selectedAddressesFile: null,
+        importFiles: [],
+      }));
+    }
+  };
+
+  const filteredApplications = useMemo(() => {
+    const query = adminData.applicationsQuery.trim().toLowerCase();
+    const source = adminData.applications.filter((item) => item.status === 'pending');
+    if (!query) return source.slice(0, 5);
+    return source
+      .filter((item) =>
+        [item.first_name, item.last_name, item.email, item.phone, item.license_number, item.status]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .includes(query)
+      )
+      .slice(0, 5);
+  }, [adminData.applications, adminData.applicationsQuery]);
+
+  const filteredOrderLogs = useMemo(() => {
+    const query = adminData.orderLogsQuery.trim().toLowerCase();
+    const source = adminData.logs;
+    if (!query) return source.slice(0, 5);
+    return source
+      .filter((item) =>
+        [item.order_id, item.status, item.pickup_address, item.dropoff_address, item.client_id, item.driver_id]
+          .join(' ')
+          .toLowerCase()
+          .includes(query)
+      )
+      .slice(0, 5);
+  }, [adminData.logs, adminData.orderLogsQuery]);
+
+  const filteredClassLogs = useMemo(() => {
+    const query = adminData.classLogsQuery.trim().toLowerCase();
+    const source = adminData.classApplications.filter((application) => application.status !== 'pending');
+    if (!query) return source.slice(0, 5);
+    return source
+      .filter((item) =>
+        [item.id, item.driver_id, item.status, item.review_note, item.requested_car_class]
+          .join(' ')
+          .toLowerCase()
+          .includes(query)
+      )
+      .slice(0, 5);
+  }, [adminData.classApplications, adminData.classLogsQuery]);
+
+  const filteredDriverApplicationLogs = useMemo(() => {
+    const query = adminData.driverApplicationLogsQuery.trim().toLowerCase();
+    const source = adminData.applications.filter((item) => item.status !== 'pending');
+    if (!query) return source.slice(0, 5);
+    return source
+      .filter((item) =>
+        [item.id, item.first_name, item.last_name, item.email, item.phone, item.status]
+          .join(' ')
+          .toLowerCase()
+          .includes(query)
+      )
+      .slice(0, 5);
+  }, [adminData.applications, adminData.driverApplicationLogsQuery]);
+
+  const adminChartData = useMemo(() => {
+    const analytics = adminData.analytics || {};
+    if (adminData.statsMetric === 'fleet') {
+      return CLASS_ORDER.map((carClass) => ({
+        key: carClass,
+        label: CLASS_LABELS[carClass],
+        value: analytics.orders_by_car_class?.[carClass] || 0,
+      }));
+    }
+    const source = adminData.statsMetric === 'revenue' ? analytics.revenue_by_period : analytics.orders_count_by_period;
+    const periodLabels = {
+      day: '1 день',
+      week: '1 тиждень',
+      month: '1 місяць',
+      year: '1 рік',
+    };
+    return ['day', 'week', 'month', 'year'].map((period) => ({
+      key: period,
+      label: periodLabels[period],
+      value: source?.[period] || 0,
+    }));
+  }, [adminData.analytics, adminData.statsMetric]);
+
+  const adminChartMax = useMemo(
+    () => Math.max(...adminChartData.map((item) => Number(item.value) || 0), 1),
+    [adminChartData]
+  );
+
+  const filteredFleetCars = useMemo(() => {
+    const query = adminData.fleetQuery.trim().toLowerCase();
+    if (!query) return adminData.fleetCars.slice(0, 5);
+    return adminData.fleetCars.filter((car) =>
+      [car.plate_number, car.make, car.model, car.assigned_driver_name, car.assigned_driver_id]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [adminData.fleetCars, adminData.fleetQuery]);
+
+  const filteredPendingClassApplications = useMemo(() => {
+    const pending = adminData.classApplications.filter((application) => application.status === 'pending');
+    const query = adminData.pendingClassQuery.trim().toLowerCase();
+    if (!query) return pending.slice(0, 5);
+    return pending.filter((application) =>
+      [application.id, application.driver_id, application.requested_car_class, application.own_car_make, application.own_car_model, application.own_car_plate]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [adminData.classApplications, adminData.pendingClassQuery]);
+
+  const filteredDriverStats = useMemo(() => {
+    const query = adminData.driverStatsQuery.trim().toLowerCase();
+    if (!query) return adminData.driverStats.slice(0, 20);
+    return adminData.driverStats.filter((driver) =>
+      [driver.driver_id, displayDriverName(driver.driver_name, driver.driver_id), driver.email]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [adminData.driverStats, adminData.driverStatsQuery]);
+
+  const filteredAdminReviews = useMemo(() => {
+    const query = adminData.adminReviewsQuery.trim().toLowerCase();
+    if (!query) return adminData.reviews.slice(0, 12);
+    return adminData.reviews.filter((review) =>
+      [review.id, review.order_id, review.rating, review.comment]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [adminData.reviews, adminData.adminReviewsQuery]);
+
   const renderAdminPanel = () => (
-    <div className="dashboard-grid">
-      <section className="panel-card">
-        <h3>Заявки водіїв</h3>
-        {adminData.applications.length === 0 && <p>Немає заявок</p>}
-        {adminData.applications.map((application) => (
-          <div key={application.id} className="list-item">
-            <p>
-              <strong>{application.first_name} {application.last_name}</strong>
-            </p>
-            <p>{application.email}</p>
-            <p>Права: {application.license_series} {application.license_number}</p>
-            <p>Статус: {application.status}</p>
-            {application.status === 'pending' && (
-              <div className="inline-actions">
-                <button type="button" className="primary compact" onClick={() => reviewDriverApplication(application.id, true)}>
-                  Підтвердити
-                </button>
-                <button type="button" className="secondary compact" onClick={() => reviewDriverApplication(application.id, false)}>
-                  Відхилити
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
+    <div
+      className={`dashboard-grid admin-dashboard ${adminData.activeView === 'logs' ? 'admin-logs-layout' : ''} ${
+        ['requests', 'stats', 'search'].includes(adminData.activeView) ? 'admin-two-columns' : ''
+      }`}
+    >
+      <section className="panel-card wide admin-header">
+        <h3>Панель адміністратора</h3>
+        <div className="inline-actions admin-tabs">
+          <button type="button" className={`secondary compact ${adminData.activeView === 'requests' ? 'active' : ''}`} onClick={() => setAdminData((prev) => ({ ...prev, activeView: 'requests' }))}>
+            Заявки
+          </button>
+          <button type="button" className={`secondary compact ${adminData.activeView === 'logs' ? 'active' : ''}`} onClick={() => setAdminData((prev) => ({ ...prev, activeView: 'logs' }))}>
+            Логи подій
+          </button>
+          <button type="button" className={`secondary compact ${adminData.activeView === 'stats' ? 'active' : ''}`} onClick={() => setAdminData((prev) => ({ ...prev, activeView: 'stats' }))}>
+            Статистика
+          </button>
+          <button type="button" className={`secondary compact ${adminData.activeView === 'fleet' ? 'active' : ''}`} onClick={() => setAdminData((prev) => ({ ...prev, activeView: 'fleet' }))}>
+            Автопарк
+          </button>
+          <button type="button" className={`secondary compact ${adminData.activeView === 'search' ? 'active' : ''}`} onClick={() => setAdminData((prev) => ({ ...prev, activeView: 'search' }))}>
+            Пошук
+          </button>
+          <button type="button" className={`secondary compact ${adminData.activeView === 'import' ? 'active' : ''}`} onClick={() => setAdminData((prev) => ({ ...prev, activeView: 'import' }))}>
+            Імпортувати дані
+          </button>
+        </div>
       </section>
 
-      <section className="panel-card wide">
-        <h3>Автопарк (30 авто)</h3>
-        <p className="muted">10 економ, 10 комфорт, 10 бізнес. По кліку видно деталі авто та водія.</p>
-        <div className="fleet-grid">
-          {adminData.fleetCars.map((car) => (
-            <button
-              key={car.id}
-              type="button"
-              className={`fleet-car ${car.is_occupied ? 'occupied' : 'free'} ${adminData.selectedCarId === car.id ? 'active' : ''}`}
-              onClick={() => setAdminData((prev) => ({ ...prev, selectedCarId: car.id }))}
-            >
-              <strong>{car.make} {car.model}</strong>
-              <span>{car.plate_number}</span>
-              <span>Клас: {CLASS_LABELS[car.comfort_class]}</span>
-              <span>{car.is_occupied ? `Зайняте (${car.assigned_driver_name || 'водій'})` : 'Вільне'}</span>
-            </button>
-          ))}
-        </div>
+      {adminData.activeView === 'requests' && (
+        <>
+          <section className="panel-card admin-column">
+            <h3>Заявки водіїв</h3>
+            <input
+              placeholder="Пошук заявки водія"
+              value={adminData.applicationsQuery}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, applicationsQuery: event.target.value }))}
+            />
+            <div className="scroll-list">
+              {filteredApplications.length === 0 && <p className="muted">Немає заявок. Розділ готовий до нових звернень.</p>}
+              {filteredApplications.map((application) => (
+                <div key={application.id} className="list-item">
+                  <p>
+                    <strong>{application.first_name} {application.last_name}</strong>
+                  </p>
+                  <p>{application.email}</p>
+                  <p>Права: {application.license_series} {application.license_number}</p>
+                  <p>Статус: {application.status}</p>
+                  {application.status === 'pending' && (
+                    <div className="inline-actions">
+                      <button type="button" className="primary compact" onClick={() => reviewDriverApplication(application.id, true)}>
+                        Підтвердити
+                      </button>
+                      <button type="button" className="secondary compact" onClick={() => reviewDriverApplication(application.id, false)}>
+                        Відхилити
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
 
-        {selectedFleetCar && (
-          <div className="car-detail">
-            <h4>{selectedFleetCar.make} {selectedFleetCar.model}</h4>
-            <p><strong>Номер:</strong> {selectedFleetCar.plate_number}</p>
-            <p><strong>Рік:</strong> {selectedFleetCar.production_year}</p>
-            <p><strong>Двигун:</strong> {selectedFleetCar.engine}</p>
-            <p><strong>Коробка:</strong> {selectedFleetCar.transmission}</p>
-            <p><strong>Водій:</strong> {selectedFleetCar.assigned_driver_name || 'Не призначено'}</p>
+          <section className="panel-card admin-column">
+            <h3>Класи доступу водіїв</h3>
+            <input
+              placeholder="Пошук заявки на клас"
+              value={adminData.pendingClassQuery}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, pendingClassQuery: event.target.value }))}
+            />
+            <div className="scroll-list">
+              {filteredPendingClassApplications.length === 0 && <p className="muted">Немає активних заявок. Очікуємо нові запити.</p>}
+              {filteredPendingClassApplications.map((application) => (
+                <div key={application.id} className="list-item">
+                  <p><strong>Driver #{application.driver_id}</strong></p>
+                  <p>Клас заявки: {CLASS_LABELS[application.requested_car_class]}</p>
+                  <p>
+                    Авто: {application.own_car_make} {application.own_car_model} ({application.own_car_plate})
+                  </p>
+                  <select
+                    value={adminData.classApprovalByApplication[application.id] || application.requested_car_class}
+                    onChange={(event) =>
+                      setAdminData((prev) => ({
+                        ...prev,
+                        classApprovalByApplication: {
+                          ...prev.classApprovalByApplication,
+                          [application.id]: event.target.value,
+                        },
+                      }))
+                    }
+                  >
+                    {CLASS_ORDER.map((carClass) => (
+                      <option key={carClass} value={carClass}>
+                        {CLASS_LABELS[carClass]}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    placeholder="Коментар адміністратора"
+                    value={adminData.classReviewNoteById[application.id] || ''}
+                    onChange={(event) =>
+                      setAdminData((prev) => ({
+                        ...prev,
+                        classReviewNoteById: {
+                          ...prev.classReviewNoteById,
+                          [application.id]: event.target.value,
+                        },
+                      }))
+                    }
+                  />
+                  <div className="inline-actions">
+                    <button type="button" className="primary compact" onClick={() => reviewDriverClassApplication(application.id, true)}>
+                      Одобрити
+                    </button>
+                    <button type="button" className="secondary compact" onClick={() => reviewDriverClassApplication(application.id, false)}>
+                      Відхилити
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
 
-            {!selectedFleetCar.is_occupied && (
-              <div className="assign-row">
-                <select
-                  value={adminData.selectedDriverByCar[selectedFleetCar.id] || ''}
-                  onChange={(event) =>
+        </>
+      )}
+
+      {adminData.activeView === 'logs' && (
+        <>
+          <section className="panel-card admin-column">
+            <h3>Логи замовлень</h3>
+            <input
+              placeholder="Пошук логу замовлення"
+              value={adminData.orderLogsQuery}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, orderLogsQuery: event.target.value }))}
+            />
+            <div className="scroll-list">
+              {filteredOrderLogs.map((log) => (
+                <div key={log.order_id} className="list-item">
+                  <p><strong>Замовлення #{log.order_id}</strong></p>
+                  <p>{ORDER_STATUS_LABELS[log.status] || log.status}</p>
+                  <p>{log.pickup_address} {'->'} {log.dropoff_address}</p>
+                  <p>{log.distance_km} км | Повна вартість: {money(log.final_cost ?? log.estimated_cost)}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel-card admin-column">
+            <h3>Одобрення класу автомобіля (логи)</h3>
+            <input
+              placeholder="Пошук логу по класу авто"
+              value={adminData.classLogsQuery}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, classLogsQuery: event.target.value }))}
+            />
+            <div className="scroll-list">
+              {filteredClassLogs.map((application) => (
+                <div key={application.id} className="list-item">
+                  <p><strong>Заявка #{application.id}</strong></p>
+                  <p>Водій: #{application.driver_id}</p>
+                  <p>Статус: {application.status}</p>
+                  <p>Коментар: {application.review_note || '-'}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+          <section className="panel-card admin-column">
+            <h3>Логи заявок водіїв</h3>
+            <input
+              placeholder="Пошук логу заявки водія"
+              value={adminData.driverApplicationLogsQuery}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, driverApplicationLogsQuery: event.target.value }))}
+            />
+            <div className="scroll-list">
+              {filteredDriverApplicationLogs.map((application) => (
+                <div key={application.id} className="list-item">
+                  <p><strong>Заявка #{application.id}</strong></p>
+                  <p>{application.first_name} {application.last_name}</p>
+                  <p>{application.email} | {application.phone}</p>
+                  <p>Статус: {application.status}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+
+      {adminData.activeView === 'stats' && (
+        <>
+          <section className="panel-card admin-column">
+            <h3>Статистика водія</h3>
+            <input
+              placeholder="Пошук водія: ім'я / email / id"
+              value={adminData.driverStatsQuery}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, driverStatsQuery: event.target.value }))}
+            />
+            <div className="scroll-list">
+              {filteredDriverStats.map((driver) => (
+                <button
+                  key={driver.driver_id}
+                  type="button"
+                  className={`secondary ${adminData.selectedDriverId === driver.driver_id ? 'active' : ''}`}
+                  onClick={() =>
                     setAdminData((prev) => ({
                       ...prev,
-                      selectedDriverByCar: {
-                        ...prev.selectedDriverByCar,
-                        [selectedFleetCar.id]: event.target.value,
-                      },
+                      selectedDriverId: driver.driver_id,
+                      selectedDriverDetails: null,
                     }))
                   }
                 >
-                  <option value="">Оберіть водія</option>
-                  {adminData.drivers.map((driver) => (
-                    <option key={driver.id} value={driver.id}>
-                      {driver.driver_name} ({driver.status})
-                    </option>
-                  ))}
-                </select>
-                <button type="button" className="primary compact" onClick={() => assignFleetCarToDriver(selectedFleetCar.id)}>
-                  Видати авто
+                  {displayDriverName(driver.driver_name, driver.driver_id)} | {driver.completed_orders} поїздок
                 </button>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-
-      <section className="panel-card">
-        <h3>Класи доступу водіїв</h3>
-        {adminData.drivers.map((driver) => (
-          <div key={driver.id} className="list-item">
-            <p><strong>{driver.driver_name}</strong></p>
-            <p>Email: {driver.email || '-'}</p>
-            <p>Підтверджений клас: {CLASS_LABELS[driver.approved_car_class]}</p>
-            <p>Запитаний клас: {driver.requested_car_class ? CLASS_LABELS[driver.requested_car_class] : '-'}</p>
-            <p>Свій автомобіль: {driver.uses_own_car ? 'Так' : 'Ні'}</p>
-            <div className="inline-actions">
-              <select
-                value={adminData.classApprovalByDriver[driver.id] || driver.approved_car_class}
-                onChange={(event) =>
-                  setAdminData((prev) => ({
-                    ...prev,
-                    classApprovalByDriver: {
-                      ...prev.classApprovalByDriver,
-                      [driver.id]: event.target.value,
-                    },
-                  }))
-                }
-              >
-                {CLASS_ORDER.map((carClass) => (
-                  <option key={carClass} value={carClass}>
-                    {CLASS_LABELS[carClass]}
-                  </option>
-                ))}
-              </select>
-              <button type="button" className="primary compact" onClick={() => approveDriverClass(driver.id, true)}>
-                Підтвердити клас
-              </button>
-              <button type="button" className="secondary compact" onClick={() => approveDriverClass(driver.id, false)}>
-                Відхилити
-              </button>
+              ))}
+              {adminData.selectedDriverDetails && (
+                <div className="list-item">
+                  <p><strong>{displayDriverName(adminData.selectedDriverDetails.driver_name, adminData.selectedDriverDetails.driver_id)}</strong></p>
+                  <p>Email: {adminData.selectedDriverDetails.email}</p>
+                  <p>Кількість поїздок: {adminData.selectedDriverDetails.total_trips}</p>
+                  <p>Авто: {adminData.selectedDriverDetails.active_car || '-'}</p>
+                  <p>Рейтинг: {adminData.selectedDriverDetails.avg_rating}/5</p>
+                </div>
+              )}
             </div>
+          </section>
+
+          <section className="panel-card admin-column">
+            <h3>Статистика</h3>
+            <select
+              value={adminData.statsMetric}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, statsMetric: event.target.value }))}
+            >
+              <option value="revenue">Каса</option>
+              <option value="orders">Кількість замовлень</option>
+              <option value="fleet">Кількість авто в автопарку</option>
+            </select>
+            <div className="bar-chart">
+              {adminChartData.map((item) => (
+                <div key={item.key} className="bar-item">
+                  <span className="bar-value">{adminData.statsMetric === 'revenue' ? money(item.value) : item.value}</span>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ height: `${Math.max((Number(item.value) / adminChartMax) * 100, 4)}%` }} />
+                  </div>
+                  <span className="bar-label">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel-card wide">
+            <h3>Відгуки клієнтів</h3>
             <input
-              placeholder="Причина відхилення (для кнопки Відхилити)"
-              value={adminData.classReviewNoteByDriver?.[driver.id] || ''}
-              onChange={(event) =>
-                setAdminData((prev) => ({
-                  ...prev,
-                  classReviewNoteByDriver: {
-                    ...prev.classReviewNoteByDriver,
-                    [driver.id]: event.target.value,
-                  },
-                }))
-              }
+              placeholder="Пошук конкретного відгуку"
+              value={adminData.adminReviewsQuery}
+              onChange={(event) => setAdminData((prev) => ({ ...prev, adminReviewsQuery: event.target.value }))}
             />
-          </div>
-        ))}
-      </section>
-
-      <section className="panel-card">
-        <h3>Заявки на одобрення класу автомобіля</h3>
-        {adminData.classApplications.filter((application) => application.status === 'pending').length === 0 && (
-          <p>Немає активних заявок</p>
-        )}
-        {adminData.classApplications
-          .filter((application) => application.status === 'pending')
-          .map((application) => (
-            <div key={application.id} className="list-item">
-              <p><strong>Driver #{application.driver_id}</strong></p>
-              <p>Клас заявки: {CLASS_LABELS[application.requested_car_class]}</p>
-              <p>
-                Авто: {application.own_car_make} {application.own_car_model} ({application.own_car_plate})
-              </p>
-              <select
-                value={adminData.classApprovalByApplication[application.id] || application.requested_car_class}
-                onChange={(event) =>
-                  setAdminData((prev) => ({
-                    ...prev,
-                    classApprovalByApplication: {
-                      ...prev.classApprovalByApplication,
-                      [application.id]: event.target.value,
-                    },
-                  }))
-                }
-              >
-                {CLASS_ORDER.map((carClass) => (
-                  <option key={carClass} value={carClass}>
-                    {CLASS_LABELS[carClass]}
-                  </option>
-                ))}
-              </select>
-              <input
-                placeholder="Коментар адміністратора"
-                value={adminData.classReviewNoteById[application.id] || ''}
-                onChange={(event) =>
-                  setAdminData((prev) => ({
-                    ...prev,
-                    classReviewNoteById: {
-                      ...prev.classReviewNoteById,
-                      [application.id]: event.target.value,
-                    },
-                  }))
-                }
-              />
-              <div className="inline-actions">
-                <button type="button" className="primary compact" onClick={() => reviewDriverClassApplication(application.id, true)}>
-                  Одобрити
-                </button>
-                <button type="button" className="secondary compact" onClick={() => reviewDriverClassApplication(application.id, false)}>
-                  Відхилити
-                </button>
+            {filteredAdminReviews.slice(0, 12).map((review) => (
+              <div key={review.id} className="list-item">
+                <p><strong>Замовлення #{review.order_id}</strong> | Оцінка: {review.rating}/5</p>
+                <p>{review.comment || 'Без коментаря'}</p>
               </div>
+            ))}
+          </section>
+        </>
+      )}
+
+      {adminData.activeView === 'search' && (
+        <>
+          <section className="panel-card wide">
+            <h3>Пошук (замовлення / водії)</h3>
+            <p className="muted">Пошук за телефоном, номером поїздки, ПІБ клієнта/водія, email, номером авто.</p>
+            <div className="input-row">
+              <input
+                value={adminData.searchQuery}
+                onChange={(event) => setAdminData((prev) => ({ ...prev, searchQuery: event.target.value }))}
+                placeholder="Введіть запит"
+              />
+              <button type="button" className="primary compact" onClick={searchAdminEntities} disabled={adminData.searching}>
+                {adminData.searching ? 'Пошук...' : 'Знайти'}
+              </button>
             </div>
-          ))}
-      </section>
+          </section>
 
-      <section className="panel-card">
-        <h3>Логи замовлень</h3>
-        {adminData.logs.slice(0, 12).map((log) => (
-          <div key={log.order_id} className="list-item">
-            <p><strong>Замовлення #{log.order_id}</strong></p>
-            <p>{ORDER_STATUS_LABELS[log.status] || log.status}</p>
-            <p>{log.pickup_address} {'->'} {log.dropoff_address}</p>
-            <p>{log.distance_km} км | Повна вартість: {money(log.final_cost ?? log.estimated_cost)}</p>
-          </div>
-        ))}
-      </section>
-
-      <section className="panel-card">
-        <h3>Одобрення класу автомобіля (логи)</h3>
-        {adminData.classApplications
-          .filter((application) => application.status !== 'pending')
-          .slice(0, 12)
-          .map((application) => (
-            <div key={application.id} className="list-item">
-              <p><strong>Заявка #{application.id}</strong></p>
-              <p>Водій: #{application.driver_id}</p>
-              <p>Статус: {application.status}</p>
-              <p>Коментар: {application.review_note || '-'}</p>
+          <section className="panel-card admin-column">
+            <h3>Знайдені замовлення</h3>
+            <div className="scroll-list">
+              {(adminData.searchResults?.orders || []).map((order) => (
+                <div key={order.order_id} className="list-item">
+                  <p><strong>Замовлення #{order.order_id}</strong> ({order.status})</p>
+                  <p>Клієнт: {order.client_name} | {order.client_phone}</p>
+                  <p>Маршрут: {order.pickup_address} {'->'} {order.dropoff_address}</p>
+                  <p>Водій: {order.driver_name || '-'} | Сума: {money(order.final_cost)}</p>
+                </div>
+              ))}
             </div>
-          ))}
-      </section>
+          </section>
 
-      <section className="panel-card wide">
-        <h3>Статистика</h3>
-        <p>
-          Каса: день {money(adminData.analytics?.revenue_by_period?.day)} | тиждень {money(adminData.analytics?.revenue_by_period?.week)} | місяць {money(adminData.analytics?.revenue_by_period?.month)} | рік {money(adminData.analytics?.revenue_by_period?.year)}
-        </p>
-        <p>
-          Кількість замовлень: день {adminData.analytics?.orders_count_by_period?.day || 0} | тиждень {adminData.analytics?.orders_count_by_period?.week || 0} | місяць {adminData.analytics?.orders_count_by_period?.month || 0} | рік {adminData.analytics?.orders_count_by_period?.year || 0}
-        </p>
-        <p>
-          По класах авто: {CLASS_ORDER.map((carClass) => `${CLASS_LABELS[carClass]}: ${adminData.analytics?.orders_by_car_class?.[carClass] || 0}`).join(' | ')}
-        </p>
-      </section>
+          <section className="panel-card admin-column">
+            <h3>Знайдені водії</h3>
+            <div className="scroll-list">
+              {(adminData.searchResults?.drivers || []).map((driver) => (
+                <div key={driver.driver_id} className="list-item">
+                  <p><strong>{displayDriverName(driver.driver_name, driver.driver_id)}</strong> ({driver.status})</p>
+                  <p>{driver.phone} | {driver.email}</p>
+                  <p>Права: {driver.license_number}</p>
+                  <p>Авто: {driver.active_car || '-'}</p>
+                  <p>Індивідуальна статистика: {driver.completed_orders} поїздок, рейтинг {driver.avg_rating}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
 
-      <section className="panel-card">
-        <h3>Статистика водія</h3>
-        <select
-          value={adminData.selectedDriverId || ''}
-          onChange={(event) =>
-            setAdminData((prev) => ({
-              ...prev,
-              selectedDriverId: Number(event.target.value) || null,
-              selectedDriverDetails: null,
-            }))
-          }
-        >
-          <option value="">Оберіть водія</option>
-          {adminData.driverStats.map((driver) => (
-            <option key={driver.driver_id} value={driver.driver_id}>
-              {driver.driver_name}
-            </option>
-          ))}
-        </select>
-        {adminData.selectedDriverDetails && (
-          <div className="list-item">
-            <p><strong>{adminData.selectedDriverDetails.driver_name}</strong></p>
-            <p>Email: {adminData.selectedDriverDetails.email}</p>
-            <p>Кількість поїздок: {adminData.selectedDriverDetails.total_trips}</p>
-            <p>Авто: {adminData.selectedDriverDetails.active_car || '-'}</p>
-            <p>Рейтинг: {adminData.selectedDriverDetails.avg_rating}/5</p>
+      {adminData.activeView === 'fleet' && (
+        <section className="panel-card wide">
+          <h3>Автопарк</h3>
+          <input
+            placeholder="Пошук авто: водій / номер / марка / модель"
+            value={adminData.fleetQuery}
+            onChange={(event) => setAdminData((prev) => ({ ...prev, fleetQuery: event.target.value }))}
+          />
+          <div className="fleet-grid">
+            {filteredFleetCars.map((car) => (
+              <button
+                key={car.id}
+                type="button"
+                className={`fleet-car ${car.is_occupied ? 'occupied' : 'free'} ${adminData.selectedCarId === car.id ? 'active' : ''}`}
+                onClick={() => setAdminData((prev) => ({ ...prev, selectedCarId: car.id }))}
+              >
+                <strong>{car.make} {car.model}</strong>
+                <span>{car.plate_number}</span>
+                <span>Клас: {CLASS_LABELS[car.comfort_class]}</span>
+                <span>{car.is_occupied ? `Зайняте (${car.assigned_driver_name || 'водій'})` : 'Вільне'}</span>
+              </button>
+            ))}
           </div>
-        )}
-      </section>
+          {selectedFleetCar && (
+            <div className="car-detail">
+              <h4>{selectedFleetCar.make} {selectedFleetCar.model}</h4>
+              <p><strong>Номер:</strong> {selectedFleetCar.plate_number}</p>
+              <p><strong>Рік:</strong> {selectedFleetCar.production_year}</p>
+              <p><strong>Двигун:</strong> {selectedFleetCar.engine}</p>
+              <p><strong>Коробка:</strong> {selectedFleetCar.transmission}</p>
+              <p><strong>Водій:</strong> {selectedFleetCar.assigned_driver_name || 'Не призначено'}</p>
 
-      <section className="panel-card">
-        <h3>Відгуки клієнтів</h3>
-        {adminData.reviews.slice(0, 12).map((review) => (
-          <div key={review.id} className="list-item">
-            <p><strong>Замовлення #{review.order_id}</strong> | Оцінка: {review.rating}/5</p>
-            <p>{review.comment || 'Без коментаря'}</p>
+              {!selectedFleetCar.is_occupied && (
+                <div className="assign-row">
+                  <select
+                    value={adminData.selectedDriverByCar[selectedFleetCar.id] || ''}
+                    onChange={(event) =>
+                      setAdminData((prev) => ({
+                        ...prev,
+                        selectedDriverByCar: {
+                          ...prev.selectedDriverByCar,
+                          [selectedFleetCar.id]: event.target.value,
+                        },
+                      }))
+                    }
+                  >
+                    <option value="">Оберіть водія</option>
+                    {adminData.drivers.map((driver) => (
+                      <option key={driver.id} value={driver.id}>
+                        {driver.driver_name} ({driver.status})
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="primary compact" onClick={() => assignFleetCarToDriver(selectedFleetCar.id)}>
+                    Видати авто
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {adminData.activeView === 'import' && (
+        <section className="panel-card wide">
+          <h3>Імпорт даних</h3>
+          <p className="muted">Оберіть потрібний файл для імпорту даних.</p>
+          <div className="import-row">
+            <input
+              id="parquet-import"
+              type="file"
+              accept=".parquet,.csv,text/csv"
+              multiple
+              onChange={handleImportFilesSelect}
+              disabled={adminData.importingParquet}
+            />
+            <button
+              type="button"
+              className="primary compact"
+              onClick={importParquetByAdmin}
+              disabled={adminData.importingParquet || !adminData.selectedParquetFile}
+            >
+              {adminData.importingParquet ? 'Імпорт...' : 'Імпортувати'}
+            </button>
           </div>
-        ))}
-      </section>
+        </section>
+      )}
     </div>
   );
 
@@ -1183,6 +1547,8 @@ export default function LvivTaxiApp() {
                 setClientData((prev) => ({
                   ...prev,
                   pickup_address: event.target.value,
+                  pickup_lat: null,
+                  pickup_lng: null,
                   open_suggestions_for: 'pickup',
                 }))
               }
@@ -1216,6 +1582,8 @@ export default function LvivTaxiApp() {
                 setClientData((prev) => ({
                   ...prev,
                   dropoff_address: event.target.value,
+                  dropoff_lat: null,
+                  dropoff_lng: null,
                   open_suggestions_for: 'dropoff',
                 }))
               }
@@ -1250,9 +1618,6 @@ export default function LvivTaxiApp() {
             referrerPolicy="no-referrer-when-downgrade"
           />
         )}
-      </section>
-
-      <section className="panel-card">
         <h3>Класи авто і вартість</h3>
         <p>Вартість: Економ 25, Стандарт 35, Комфорт 35, Бізнес 50 грн/км.</p>
         {clientData.quote ? (
@@ -1264,7 +1629,10 @@ export default function LvivTaxiApp() {
                   key={carClass}
                   type="button"
                   className={`class-card ${clientData.selected_class === carClass ? 'active' : ''}`}
-                  onClick={() => createOrder(carClass)}
+                  onClick={() => {
+                    setClientData((prev) => ({ ...prev, selected_class: carClass }));
+                    createOrder(carClass);
+                  }}
                   disabled={clientData.creatingOrder}
                 >
                   <strong>{CLASS_LABELS[carClass]}</strong>
@@ -1276,11 +1644,31 @@ export default function LvivTaxiApp() {
         ) : (
           <p>Вкажіть обидві адреси, щоб побачити тариф.</p>
         )}
+        {clientData.pendingOrderConfirmation && (
+          <div className="list-item">
+            <p><strong>Підтвердити замовлення</strong></p>
+            <p>Звідки: {shortAddress(clientData.pendingOrderConfirmation.pickup_address)}</p>
+            <p>Куди: {shortAddress(clientData.pendingOrderConfirmation.dropoff_address)}</p>
+            <div className="inline-actions">
+              <button type="button" className="primary compact" onClick={confirmCreateOrder} disabled={clientData.creatingOrder}>
+                Підтвердити
+              </button>
+              <button
+                type="button"
+                className="secondary compact"
+                onClick={() => setClientData((prev) => ({ ...prev, pendingOrderConfirmation: null }))}
+                disabled={clientData.creatingOrder}
+              >
+                Скасувати
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
-      <section className="panel-card">
+      <section className="panel-card wide">
         <h3>{clientData.ordersTab === 'active' ? 'Мої замовлення' : 'Моя історія поїздок'}</h3>
-        <div className="inline-actions">
+        <div className="inline-actions full-width-actions">
           <button
             type="button"
             className={`secondary compact ${clientData.ordersTab === 'active' ? 'active' : ''}`}
@@ -1360,6 +1748,20 @@ export default function LvivTaxiApp() {
 
   const renderDriverPanel = () => (
     <div className="dashboard-grid">
+      <section className="panel-card wide">
+        <div className="driver-top-actions">
+          <button type="button" className="secondary compact" onClick={() => setDriverData((prev) => ({ ...prev, ownCarModalOpen: true }))}>
+            Працювати на власному авто
+          </button>
+          <button
+            type="button"
+            className={`secondary compact ${driverData.ordersTab === 'history' ? 'active' : ''}`}
+            onClick={() => setDriverData((prev) => ({ ...prev, ordersTab: prev.ordersTab === 'active' ? 'history' : 'active' }))}
+          >
+            Історія поїздок
+          </button>
+        </div>
+      </section>
       <section className="panel-card">
         <h3>Профіль водія</h3>
         {!driverData.profile && <p>Завантаження...</p>}
@@ -1395,20 +1797,20 @@ export default function LvivTaxiApp() {
               </div>
             )}
 
-            <div className="inline-actions">
-              <button type="button" className="primary compact" onClick={() => setDriverStatus('free')} disabled={driverData.loadingStatus}>
+            <div className="inline-actions driver-status-actions">
+              <button type="button" className="primary" onClick={() => setDriverStatus('free')} disabled={driverData.loadingStatus}>
                 Почати роботу
               </button>
-              <button type="button" className="secondary compact" onClick={() => setDriverStatus('break')} disabled={driverData.loadingStatus}>
+              <button type="button" className="secondary" onClick={() => setDriverStatus('break')} disabled={driverData.loadingStatus}>
                 Пауза
               </button>
-              <button type="button" className="secondary compact" onClick={() => setDriverStatus('inactive')} disabled={driverData.loadingStatus}>
+              <button type="button" className="secondary" onClick={() => setDriverStatus('inactive')} disabled={driverData.loadingStatus}>
                 Завершити зміну
               </button>
             </div>
 
-            <button type="button" className="secondary" onClick={updateDriverLocation} disabled={driverData.loadingLocation}>
-              {driverData.loadingLocation ? 'Оновлюємо геопозицію...' : 'Оновити геопозицію (Google Maps)'}
+            <button type="button" className="secondary driver-gps-button" onClick={updateDriverLocation} disabled={driverData.loadingLocation}>
+              {driverData.loadingLocation ? 'Оновлюємо геопозицію...' : 'Активувати GPS трекер'}
             </button>
 
             {driverMapUrl && (
@@ -1424,9 +1826,11 @@ export default function LvivTaxiApp() {
         )}
       </section>
 
-      <section className="panel-card">
-        <h3>Працюю на своєму авто</h3>
-        <form className="form-grid" onSubmit={submitDriverOwnCar}>
+      {driverData.ownCarModalOpen && (
+        <div className="modal-backdrop">
+          <section className="panel-card modal-card">
+            <h3>Працюю на своєму авто</h3>
+            <form className="form-grid" onSubmit={submitDriverOwnCar}>
           <label htmlFor="make">Марка</label>
           <input id="make" name="make" value={driverData.ownCarForm.make} onChange={updateDriverOwnCarField} required />
 
@@ -1471,16 +1875,27 @@ export default function LvivTaxiApp() {
             ))}
           </select>
 
-          <button type="submit" className="primary" disabled={driverData.loadingOwnCar}>
-            {driverData.loadingOwnCar ? 'Відправка...' : 'Відправити на підтвердження'}
-          </button>
-        </form>
-      </section>
+              <button type="submit" className="primary" disabled={driverData.loadingOwnCar}>
+                {driverData.loadingOwnCar ? 'Відправка...' : 'Відправити на підтвердження'}
+              </button>
+              <button type="button" className="secondary" onClick={() => setDriverData((prev) => ({ ...prev, ownCarModalOpen: false }))}>
+                Закрити
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
 
-      <section className="panel-card wide">
-        <h3>Мої замовлення</h3>
-        {driverData.orders.length === 0 && <p>Поки що замовлень немає</p>}
-        {driverData.orders.map((order) => (
+      <section className="panel-card">
+        <h3>{driverData.ordersTab === 'active' ? 'Мої замовлення' : 'Історія поїздок'}</h3>
+        {(driverData.ordersTab === 'active'
+          ? driverData.orders.filter((order) => ACTIVE_CLIENT_ORDER_STATUSES.has(order.status))
+          : driverData.orders.filter((order) => !ACTIVE_CLIENT_ORDER_STATUSES.has(order.status))
+        ).length === 0 && <p>Поки що замовлень немає</p>}
+        {(driverData.ordersTab === 'active'
+          ? driverData.orders.filter((order) => ACTIVE_CLIENT_ORDER_STATUSES.has(order.status))
+          : driverData.orders.filter((order) => !ACTIVE_CLIENT_ORDER_STATUSES.has(order.status))
+        ).map((order) => (
           <div key={order.id} className="list-item">
             <p><strong>Замовлення #{order.id}</strong> | {ORDER_STATUS_LABELS[order.status] || order.status}</p>
             <p>{order.pickup_address} {'->'} {order.dropoff_address}</p>
@@ -1521,13 +1936,23 @@ export default function LvivTaxiApp() {
 
       <section className="panel-card wide">
         <h3>Відгуки клієнтів</h3>
+        <input
+          placeholder="Пошук відгуку"
+          value={driverData.reviewsQuery}
+          onChange={(event) => setDriverData((prev) => ({ ...prev, reviewsQuery: event.target.value }))}
+        />
         {driverData.reviews.length === 0 && <p>Поки що відгуків немає</p>}
-        {driverData.reviews.slice(0, 12).map((review) => (
+        {driverData.reviews
+          .filter((review) =>
+            [review.comment, review.rating, review.id].join(' ').toLowerCase().includes(driverData.reviewsQuery.trim().toLowerCase())
+          )
+          .slice(0, 12)
+          .map((review) => (
           <div key={review.id} className="list-item">
             <p><strong>Оцінка:</strong> {review.rating}/5</p>
             <p>{review.comment || 'Без коментаря'}</p>
           </div>
-        ))}
+          ))}
       </section>
     </div>
   );
@@ -1539,7 +1964,6 @@ export default function LvivTaxiApp() {
           <div className="brand">
             <span className="brand-dot" />
             <h1>Lviv Taxi</h1>
-            <p>Система клієнта, водія та адміністратора</p>
           </div>
           {user ? (
             <button type="button" className="secondary compact" onClick={logout}>
@@ -1552,7 +1976,7 @@ export default function LvivTaxiApp() {
 
         {!user && (
           <div className="auth-layout">
-            <form className="panel-card" onSubmit={submitAuth}>
+            <form className="panel-card auth-card form-grid" onSubmit={submitAuth}>
               <h3>{mode === 'login' ? 'Вхід' : 'Реєстрація'}</h3>
 
               {mode === 'register' && (
@@ -1608,15 +2032,6 @@ export default function LvivTaxiApp() {
                 {mode === 'login' ? 'Ще немає акаунта?' : 'Вже є акаунт?'}
               </button>
             </form>
-
-            <section className="panel-card">
-              <h3>Після входу ви отримаєте:</h3>
-              <ul>
-                <li>Клієнт: геолокація, маршрут, тарифи та створення замовлень.</li>
-                <li>Водій: власне/видане авто, Google Maps геопозиція, обробка замовлень.</li>
-                <li>Адмін: автопарк, видача авто, класи водіїв, контроль логів.</li>
-              </ul>
-            </section>
           </div>
         )}
 
@@ -1624,6 +2039,7 @@ export default function LvivTaxiApp() {
         {user?.role === 'client' && renderClientPanel()}
         {user?.role === 'driver' && renderDriverPanel()}
       </section>
+      {toastMessage && <div className="toast-message">{toastMessage}</div>}
     </main>
   );
 }

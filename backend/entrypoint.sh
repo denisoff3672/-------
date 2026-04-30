@@ -2,7 +2,7 @@
 set -eu
 
 echo "[backend] Waiting for PostgreSQL..."
-until python -c "import psycopg; psycopg.connect('dbname=' + '${POSTGRES_DB}' + ' user=' + '${POSTGRES_USER}' + ' password=' + '${POSTGRES_PASSWORD}' + ' host=' + '${POSTGRES_HOST}' + ' port=' + '${POSTGRES_PORT}').close()"; do
+until python -c "import socket; socket.create_connection(('${POSTGRES_HOST}', int('${POSTGRES_PORT}')), 2).close()"; do
   sleep 2
 done
 

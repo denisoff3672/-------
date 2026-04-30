@@ -144,6 +144,8 @@ def create_order(
             raise HTTPException(status_code=404, detail="Client not found")
 
     _ensure_lviv_route(payload.pickup_lat, payload.pickup_lng, payload.dropoff_lat, payload.dropoff_lng)
+    if payload.pickup_address.strip().lower() == payload.dropoff_address.strip().lower():
+        raise HTTPException(status_code=400, detail="Pickup and dropoff addresses must be different")
 
     existing_active_order = db.scalar(
         select(Order)

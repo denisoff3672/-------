@@ -321,6 +321,38 @@ class AdminDriverDetailsOut(BaseModel):
     recent_reviews: list[ReviewOut]
 
 
+class AdminOrderSearchOut(BaseModel):
+    order_id: int
+    client_order_number: int
+    status: OrderStatus
+    created_at: datetime
+    client_name: str
+    client_phone: str
+    driver_id: int | None
+    driver_name: str | None
+    pickup_address: str
+    dropoff_address: str
+    final_cost: float | None
+
+
+class AdminDriverSearchOut(BaseModel):
+    driver_id: int
+    driver_name: str
+    email: str
+    phone: str
+    license_number: str
+    status: DriverStatus
+    approved_car_class: CarComfortClass
+    active_car: str | None
+    completed_orders: int
+    avg_rating: float
+
+
+class AdminSearchOut(BaseModel):
+    orders: list[AdminOrderSearchOut]
+    drivers: list[AdminDriverSearchOut]
+
+
 class DriverClassApplicationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -348,6 +380,12 @@ class ReportOut(BaseModel):
     revenue: float
     top_routes: list[dict]
     driver_activity: list[dict]
+
+
+class AdminSeedImportOut(BaseModel):
+    message: str
+    file_path: str
+    records: dict[str, int]
 
 
 OrderOut.model_rebuild()

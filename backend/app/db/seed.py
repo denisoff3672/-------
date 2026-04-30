@@ -15,15 +15,6 @@ PREDEFINED_USERS = [
         "role": UserRole.ADMIN,
     },
     {
-        "username": "driver@taxi.local",
-        "password": "driver123",
-        "first_name": "Demo",
-        "last_name": "Driver",
-        "phone": "+380500000002",
-        "role": UserRole.DRIVER,
-        "license_number": "DRV-DEFAULT-001",
-    },
-    {
         "username": "client@taxi.local",
         "password": "client123",
         "first_name": "Demo",

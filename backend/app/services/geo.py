@@ -1,8 +1,8 @@
 LVIV_BOUNDS = {
     "min_lat": 49.77,
-    "max_lat": 49.90,
-    "min_lng": 23.90,
-    "max_lng": 24.10,
+    "max_lat": 49.9,
+    "min_lng": 23.9,
+    "max_lng": 24.1,
 }
 
 
