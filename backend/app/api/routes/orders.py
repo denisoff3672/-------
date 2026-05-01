@@ -95,14 +95,11 @@ def _find_nearest_driver(
         if driver.current_lat is None or driver.current_lng is None:
             continue
 
-        if not driver.uses_own_car:
-            if not driver.car_id:
-                continue
-            if not driver.car or not driver.car.is_active:
-                continue
-
         distance = haversine_km(driver.current_lat, driver.current_lng, pickup_lat, pickup_lng)
-        if distance < nearest_distance:
+        # Deterministic nearest-driver selection:
+        # 1) shorter distance wins
+        # 2) lower driver id wins for equal distance
+        if distance < nearest_distance or (distance == nearest_distance and nearest and driver.id < nearest.id):
             nearest_distance = distance
             nearest = driver
 

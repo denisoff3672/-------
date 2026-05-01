@@ -2203,22 +2203,8 @@ export default function LvivTaxiApp() {
   );
 
   const renderDriverPanel = () => (
-    <div className="dashboard-grid">
+    <div className="dashboard-grid driver-dashboard">
       <section className="panel-card wide">
-        <div className="driver-top-actions">
-          <button type="button" className="secondary compact" onClick={() => setDriverData((prev) => ({ ...prev, ownCarModalOpen: true }))}>
-            {tr('Працювати на власному авто')}
-          </button>
-          <button
-            type="button"
-            className={`secondary compact ${driverData.ordersTab === 'history' ? 'active' : ''}`}
-            onClick={() => setDriverData((prev) => ({ ...prev, ordersTab: prev.ordersTab === 'active' ? 'history' : 'active' }))}
-          >
-            {tr('Історія поїздок')}
-          </button>
-        </div>
-      </section>
-      <section className="panel-card">
         <h3>{tr('Профіль водія')}</h3>
         {!driverData.profile && <p>{tr('Завантаження...')}</p>}
         {driverData.profile && (
@@ -2267,6 +2253,9 @@ export default function LvivTaxiApp() {
               </button>
               <button type="button" className="secondary" onClick={() => setDriverStatus('inactive')} disabled={driverData.loadingStatus}>
                 {tr('Завершити зміну')}
+              </button>
+              <button type="button" className="secondary" onClick={() => setDriverData((prev) => ({ ...prev, ownCarModalOpen: true }))}>
+                {tr('Працювати на власному авто')}
               </button>
             </div>
 
@@ -2347,8 +2336,17 @@ export default function LvivTaxiApp() {
         </div>
       )}
 
-      <section className="panel-card">
-        <h3>{driverData.ordersTab === 'active' ? tr('Мої замовлення') : tr('Історія поїздок')}</h3>
+      <section className="panel-card balanced-panel">
+        <div className="driver-orders-header">
+          <h3>{driverData.ordersTab === 'active' ? tr('Мої замовлення') : tr('Історія поїздок')}</h3>
+          <button
+            type="button"
+            className={`secondary compact ${driverData.ordersTab === 'history' ? 'active' : ''}`}
+            onClick={() => setDriverData((prev) => ({ ...prev, ordersTab: prev.ordersTab === 'active' ? 'history' : 'active' }))}
+          >
+            {tr('Історія поїздок')}
+          </button>
+        </div>
         {(driverData.ordersTab === 'active'
           ? driverData.orders.filter((order) => ACTIVE_CLIENT_ORDER_STATUSES.has(order.status))
           : driverData.orders.filter((order) => !ACTIVE_CLIENT_ORDER_STATUSES.has(order.status))
@@ -2395,7 +2393,7 @@ export default function LvivTaxiApp() {
         ))}
       </section>
 
-      <section className="panel-card wide">
+      <section className="panel-card balanced-panel">
         <h3>{tr('Відгуки клієнтів')}</h3>
         <input
           placeholder={tr('Пошук відгуку')}
